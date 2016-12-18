@@ -347,45 +347,46 @@ module Semantics4 =
 	)
 	h
 
+    let reconstruct h =
+      let rec reconstruct stack = function
+      | [] -> List.hd stack
+      | (it, c) :: hs ->
+          if deref c 
+	  then
+	    match it with
+	    | (Var _ as x, _, _, _) -> reconstruct (x::stack) hs
+	    | (App _     , _, _, _) -> let l::r::stack' = stack in reconstruct (App (l, r) :: stack') hs
+	    | (Lam (x, _), _, _, _) -> let m::stack'    = stack in reconstruct (Lam (x, m) :: stack') hs
+	  else reconstruct stack hs
+    in
+    reconstruct [] h
+
     let eval t =
-      let mark       c  = c := true in
-      let non_marked () = ref false in
-      let marked     () = ref true  in
+      let mark    c  = c := true in
+      let default () = ref false in
       let rec eval ((it, c) :: hs) as h =
 	match it with
 	| (Var x as t, f, e, ch) ->
 	    (match lookup e x with
 	     | `Free -> mark c; apk t empty ch h
-	     | `Bound (t', e') -> eval (((t', f, e', ch), non_marked ()) :: h)
+	     | `Bound (t', e') -> eval (((t', f, e', ch), default ()) :: h)
 	    )
-        | (Lam (x, m), F, e, ch) -> let x, m = rename x m e in mark c; eval (((m, F, free e x, ch), non_marked ()) :: ((Lam (x, m), F, e, ch), c) :: hs)
+        | (Lam (x, m), F, e, ch) -> let x, m = rename x m e in mark c; eval (((m, F, free e x, ch), default ()) :: ((Lam (x, m), F, e, ch), c) :: hs)
 	| (Lam (x, m) as t, f, e, ch) -> apk t e ch h 
-	| (App (m, n), f, e, ch) -> eval (((m, T, e, h), non_marked ()) :: h)
+	| (App (m, n), f, e, ch) -> eval (((m, T, e, h), default ()) :: h)
       and apk t e ch h =
         match ch with
-	| [] -> 
-(*	    Printf.printf "history:\n%s\n" (show_history h); *)
-            let rec reconstruct stack = function
-	    | [] -> List.hd stack
-	    | (it, c) :: hs ->
-              if deref c 
-	      then
-		match it with
-		| (Var _ as x, _, _, _) -> reconstruct (x::stack) hs
-		| (App _     , _, _, _) -> let l::r::stack' = stack in reconstruct (App (l, r) :: stack') hs
-		| (Lam (x, _), _, _, _) -> let m::stack' = stack in reconstruct (Lam (x, m) :: stack') hs
-	      else reconstruct stack hs
-	    in
-	    reconstruct [] h
+	| [] -> reconstruct h
+            (* Printf.printf "history:\n%s\n" (show_history h); *)
 
 	| ((App (m, n), f, e', ch'), c') :: _ ->
 	    let f = function
-	    | Lam (x, m) -> ((m, f, extend e x (n, e'), ch'), non_marked ())
-	    | _          -> mark c'; ((n, F, e', ch'), non_marked ())
+	    | Lam (x, m) -> ((m, f, extend e x (n, e'), ch'), default ())
+	    | _          -> mark c'; ((n, F, e', ch'), default ())
 	    in
 	    eval (f t :: h)
       in
-      eval [(t, F, empty, []), non_marked ()]
+      eval [(t, F, empty, []), default ()]
 
   end
 

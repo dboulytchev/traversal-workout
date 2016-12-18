@@ -1,6 +1,7 @@
 open GT
 
 let concat = (@) 
+let deref  = (!)
 
 module S = Set.Make (String)
 module E = Map.Make (String)
@@ -224,8 +225,12 @@ module Semantics2 =
 
     open Term
 
-    type flag = T | F
+    @type flag = T | F with show
     type env  = (term * env) E.t
+
+    let rec show_env e = 
+      let es = E.bindings e in
+      show(list) (show(pair) (show(string)) (show(pair) (show(term)) show_env)) es
 
     let rec fve e =
       E.fold (fun _ (t, e) s -> S.union s (S.union (fve e) (fv t))) e S.empty
@@ -318,6 +323,72 @@ module Semantics3 =
 
   end
 
+module Semantics4 =
+  struct
+
+    open Term
+
+    type flag = Semantics2.flag = T | F
+    type env  = Semantics2.env
+
+    let empty  = Semantics2.empty
+    let extend = Semantics2.extend
+    let free   = Semantics2.free
+    let refine = Semantics2.refine 
+    let lookup = Semantics2.lookup
+    let rename = Semantics2.rename
+
+    let name = "History & Environment"
+
+    let rec show_history h =
+      show(list) 
+	(fun ((t, f, e, ch), c) -> 
+           Printf.sprintf "(%s, %s, %s, %s)" (show(term) t) (show(Semantics2.flag) f) (Semantics2.show_env e) (show(bool) (deref c))
+	)
+	h
+
+    let eval t =
+      let mark       c  = c := true in
+      let non_marked () = ref false in
+      let marked     () = ref true  in
+      let rec eval ((it, c) :: hs) as h =
+	match it with
+	| (Var x as t, f, e, ch) ->
+	    (match lookup e x with
+	     | `Free -> mark c; apk t empty ch h
+	     | `Bound (t', e') -> eval (((t', f, e', ch), non_marked ()) :: h)
+	    )
+        | (Lam (x, m), F, e, ch) -> let x, m = rename x m e in mark c; eval (((m, F, free e x, ch), non_marked ()) :: ((Lam (x, m), F, e, ch), c) :: hs)
+	| (Lam (x, m) as t, f, e, ch) -> apk t e ch h 
+	| (App (m, n), f, e, ch) -> eval (((m, T, e, h), non_marked ()) :: h)
+      and apk t e ch h =
+        match ch with
+	| [] -> 
+(*	    Printf.printf "history:\n%s\n" (show_history h); *)
+            let rec reconstruct stack = function
+	    | [] -> List.hd stack
+	    | (it, c) :: hs ->
+              if deref c 
+	      then
+		match it with
+		| (Var _ as x, _, _, _) -> reconstruct (x::stack) hs
+		| (App _     , _, _, _) -> let l::r::stack' = stack in reconstruct (App (l, r) :: stack') hs
+		| (Lam (x, _), _, _, _) -> let m::stack' = stack in reconstruct (Lam (x, m) :: stack') hs
+	      else reconstruct stack hs
+	    in
+	    reconstruct [] h
+
+	| ((App (m, n), f, e', ch'), c') :: _ ->
+	    let f = function
+	    | Lam (x, m) -> ((m, f, extend e x (n, e'), ch'), non_marked ())
+	    | _          -> mark c'; ((n, F, e', ch'), non_marked ())
+	    in
+	    eval (f t :: h)
+      in
+      eval [(t, F, empty, []), non_marked ()]
+
+  end
+
 module Tests =
   struct
 
@@ -398,14 +469,16 @@ module Tests =
     open Term
 
     let terms = concat
-      [
+    [
       id @ !"z";
       (app @ id) @ !"q";
+      "g" => (("x" => (!"g" @ !"x") @ !"x") @ !"q");
+      ("x" => (!"q" @ !"x") @ !"x") @ !"d";
       y;
       (add @ z) @ one;
       (mul @ z) @ one;
-      (mul @ two) @ two
-    ] (Generator.generate 1000)
+      (mul @ two) @ two;
+    ] (Generator.generate 1000) 
 
     module type R = 
       sig 
@@ -453,5 +526,6 @@ let _ =
     (module Semantics1.BigStep   : Tests.R);
     (module Semantics1.SmallStep : Tests.R);
     (module Semantics2           : Tests.R);
-    (module Semantics3           : Tests.R)
+    (module Semantics3           : Tests.R);
+    (module Semantics4           : Tests.R)
   ]

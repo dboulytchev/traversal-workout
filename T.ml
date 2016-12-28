@@ -120,7 +120,7 @@ module Term =
 module DeBruijn =
   struct
 
-    @type term = Free of string | Var of int | App of term * term | Lam of term with show, eq
+    @type term = Free of string | Var of int | App of term * term | Lam of term with show, eq, foldl
 
     let of_term t =
       let rec inner ((e, d) as env) = function
@@ -129,6 +129,21 @@ module DeBruijn =
       | Term.Lam (x, m) -> Lam (inner (E.add x d e, d+1) m)
       in
       inner (E.empty, 0) t
+
+    let fv t = transform(term) (object inherit [S.t] @term[foldl] end) S.empty t
+     
+    let to_term t = 
+      let rec inner s e d = function
+      | Free x     -> Term.Var x, s
+      | Var i      -> Term.Var (M.find (d - i - 1) e), s
+      | Lam n      -> let z = Term.fresh_var s in
+	              let n', s = inner (S.add z s) (M.add d z e) (d+1) n in
+		      Term.Lam (z, n'), s
+      | App (n, m) -> let n', s = inner s e d n in
+	              let m', s = inner s e d m in
+		      Term.App (n', m'), s
+      in
+      inner (fv t) M.empty 0 t |> fst
 
     let _ = 
       Printf.printf "DeBruijn:\n%!";
@@ -139,7 +154,15 @@ module DeBruijn =
       Printf.printf "%s\n%!" (show(term) @@ of_term Term.z);
       Printf.printf "%s\n%!" (show(term) @@ of_term Term.add);
       Printf.printf "%s\n%!" (show(term) @@ of_term Term.mul);
+      Printf.printf "\n%!";
+      Printf.printf "%s\n%!" (show(Term.term) (Term.id |> of_term |> to_term));
+      Printf.printf "%s\n%!" (show(Term.term) (Term.app |> of_term |> to_term));
+      Printf.printf "%s\n%!" (show(Term.term) (Term.y |> of_term |> to_term));
+      Printf.printf "%s\n%!" (show(Term.term) (Term.z |> of_term |> to_term));
+      Printf.printf "%s\n%!" (show(Term.term) (Term.add |> of_term |> to_term));
+      Printf.printf "%s\n%!" (show(Term.term) (Term.mul |> of_term |> to_term));
       Printf.printf "\n%!"
+
 
   end
 
@@ -250,7 +273,7 @@ module Semantics2 =
       then let z = fresh_var fve in z, subst m x (Var z) 
       else x, m
 
-    let name = "With environment"
+    let name = "With Environment"
 
     let rec refine t e = 
       E.fold (fun x (t, e) term -> subst term x (refine t e)) e	t
@@ -298,7 +321,7 @@ module Semantics3 =
 
     let id x = x
 
-    let name = "Tail-recursive"
+    let name = "Tail-Recursive"
 
     let eval t =      
       let rec eval t f e k = 
@@ -334,7 +357,6 @@ module Semantics4 =
     let empty  = Semantics2.empty
     let extend = Semantics2.extend
     let free   = Semantics2.free
-    let refine = Semantics2.refine 
     let lookup = Semantics2.lookup
     let rename = Semantics2.rename
 
@@ -368,25 +390,109 @@ module Semantics4 =
 	match it with
 	| (Var x as t, f, e, ch) ->
 	    (match lookup e x with
-	     | `Free -> mark c; apk t empty ch h
-	     | `Bound (t', e') -> eval (((t', f, e', ch), default ()) :: h)
+	     | `Free -> 
+                mark c; 
+                apk t empty ch h
+	     | `Bound (t', e') -> 
+                eval (((t', f, e', ch), default ()) :: h)
 	    )
-        | (Lam (x, m), F, e, ch) -> let x, m = rename x m e in mark c; eval (((m, F, free e x, ch), default ()) :: ((Lam (x, m), F, e, ch), c) :: hs)
+        | (Lam (x, m), F, e, ch) -> 
+            let x, m = rename x m e in 
+            mark c; 
+            eval (((m, F, free e x, ch), default ()) :: ((Lam (x, m), F, e, ch), c) :: hs)
 	| (Lam (x, m) as t, f, e, ch) -> apk t e ch h 
 	| (App (m, n), f, e, ch) -> eval (((m, T, e, h), default ()) :: h)
       and apk t e ch h =
         match ch with
 	| [] -> reconstruct h
-            (* Printf.printf "history:\n%s\n" (show_history h); *)
-
 	| ((App (m, n), f, e', ch'), c') :: _ ->
 	    let f = function
 	    | Lam (x, m) -> ((m, f, extend e x (n, e'), ch'), default ())
-	    | _          -> mark c'; ((n, F, e', ch'), default ())
+	    | _  -> 
+               mark c'; 
+               ((n, F, e', ch'), default ())
 	    in
 	    eval (f t :: h)
       in
       eval [(t, F, empty, []), default ()]
+
+  end
+
+module Semantics5 =
+  struct
+
+    open DeBruijn
+
+    type flag = Semantics2.flag = T | F
+
+    let name = "UNP"
+
+    let rec show_history h =
+      show(list) 
+	(fun ((t, f, bh, ch), c) -> 
+           Printf.sprintf "(%s, %s, %s)" (show(term) t) (show(Semantics2.flag) f) (*Semantics2.show_env e*) (show(bool) (deref c))
+	)
+	h
+
+    let reconstruct h =
+      let rec reconstruct stack = function
+      | [] -> List.hd stack
+      | (it, c) :: hs ->
+          if deref c 
+	  then
+	    match it with
+	    | (Var  i as x, _, bh, _) -> 
+		let rec recalculate_index bh = function
+		| 0 -> 0
+		| i -> let ((_, _, bh, _), c) :: _ = bh in
+		       (if deref c then 1 else 0) + recalculate_index bh (i-1)
+		in		
+		reconstruct (Var (recalculate_index bh i)::stack) hs
+	    | (Free _ as x, _, _, _) -> reconstruct (x::stack) hs
+	    | (App _     , _, _, _) -> let l::r::stack' = stack in reconstruct (App (l, r) :: stack') hs
+	    | (Lam _     , _, _, _) -> let m::stack'    = stack in reconstruct (Lam m :: stack') hs
+	  else reconstruct stack hs
+    in
+    reconstruct [] h
+
+    let eval t =
+      let mark    c  = c := true  in
+      let unmark  c  = c := false in
+      let default () = ref false  in
+      let marked  () = ref true   in
+      let rec eval ((it, c) :: hs) as h =
+	match it with
+	| (Free _ as t, f, bh, ch) -> mark c; apk t ch h
+	| (Var  i     , f, bh, ch) -> lookup c f bh ch h i
+        | (Lam  m     , F, bh, ch) -> mark c; eval (((m, F, h, ch), default ()) :: h) 
+	| (Lam  _ as t, f, bh, ch) -> apk t ch h
+	| (App (m, n) , f, bh, ch) -> mark c; eval (((m, T, bh, h), default ()) :: h)
+      and lookup c f bh ch h = function
+      | 0 -> 
+	  (match bh with 
+           | ((_, T, _, ch'), _) :: _ -> 
+              (match ch' with
+	       | ((t, _, bh, _), c') :: _ -> evoperand (t, f, bh, ch) h
+(*
+	       | _ -> (match ch with
+		       | [] -> reconstruct h
+		       | ((t, _, bh, ch), _) :: _ -> evoperand (t, F, bh, ch) h
+		      )
+*)
+              )
+	   | ((_, F, _, ch'), _) :: _ -> mark c; apk (Var 0) ch h
+	  )  
+      | i -> let ((_, _, bh, _), _) :: _ = bh in lookup c f bh ch h (i-1)
+      and apk t ch h = 
+	match ch with
+	| [] -> reconstruct h
+	| ((t', f, bh', ch'), c) :: _ ->
+          (match t with
+	   | Lam t'' -> unmark c; eval (((t'', f, h, ch'), default ()) :: h)
+	   | _ -> evoperand (t', F, bh', ch') h
+	  )
+      and evoperand (App (m, n), f, bh, ch) h = eval (((n, f, bh, ch), default ()) :: h) in
+      eval [(of_term t, F, [], []), default ()] |> to_term
 
   end
 
@@ -471,14 +577,18 @@ module Tests =
 
     let terms = concat
     [
+      id;
       id @ !"z";
+      !"a" @ ("x" => !"b");
       (app @ id) @ !"q";
-      "g" => (("x" => (!"g" @ !"x") @ !"x") @ !"q");
+      "g" => (("x" => (!"g" @ !"x") @ !"x") @ !"q"); 
+      "g" => (!"g" @ !"q");
       ("x" => (!"q" @ !"x") @ !"x") @ !"d";
       y;
       (add @ z) @ one;
       (mul @ z) @ one;
       (mul @ two) @ two;
+
     ] (Generator.generate 1000) 
 
     module type R = 
@@ -528,5 +638,7 @@ let _ =
     (module Semantics1.SmallStep : Tests.R);
     (module Semantics2           : Tests.R);
     (module Semantics3           : Tests.R);
-    (module Semantics4           : Tests.R)
+    (module Semantics4           : Tests.R);
+    (module Semantics5           : Tests.R)
   ]
+

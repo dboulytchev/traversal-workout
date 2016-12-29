@@ -470,16 +470,7 @@ module Semantics5 =
       and lookup c f bh ch h = function
       | 0 -> 
 	  (match bh with 
-           | ((_, T, _, ch'), _) :: _ -> 
-              (match ch' with
-	       | ((t, _, bh, _), c') :: _ -> evoperand (t, f, bh, ch) h
-(*
-	       | _ -> (match ch with
-		       | [] -> reconstruct h
-		       | ((t, _, bh, ch), _) :: _ -> evoperand (t, F, bh, ch) h
-		      )
-*)
-              )
+           | ((_, T, _, ((t, _, bh, _), _) :: _), _) :: _ -> evoperand (t, f, bh, ch) h
 	   | ((_, F, _, ch'), _) :: _ -> mark c; apk (Var 0) ch h
 	  )  
       | i -> let ((_, _, bh, _), _) :: _ = bh in lookup c f bh ch h (i-1)

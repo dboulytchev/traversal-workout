@@ -13,7 +13,7 @@ module Term =
     @type term =
     | Var of string 
     | App of term   * term 
-    | Lam of string * term with show
+    | Lam of string * term with show, eq
 
     let (!)  x   = Var x
     let (@)  x y = App (x, y)
@@ -41,11 +41,17 @@ module Term =
 	  let h, t = take s in prepend (f h) (Lazy.from_fun (fun () -> Lazy.force (bind_list f t)))
 	    
       end
+
+    let rec is_nf = function
+    | App (Lam _, _) -> false
+    | App (a, b)     -> is_nf a && is_nf b
+    | Var _          -> true
+    | Lam (_, a)     -> is_nf a
 	
     let rec fv = function
-      | Var x -> S.singleton x
-      | App (x, y) -> S.union (fv x) (fv y)
-      | Lam (x, y) -> S.remove x @@ fv y
+    | Var x -> S.singleton x
+    | App (x, y) -> S.union (fv x) (fv y)
+    | Lam (x, y) -> S.remove x @@ fv y
 
     let fresh_var = 
       let letters = 
@@ -487,6 +493,66 @@ module Semantics5 =
 
   end
 
+module FelleisenStyle =
+  struct
+
+    (* C = [] | \x.C | CE | vC *)
+    @type c = H | Lam of string * c | Fun of c * Term.term | Arg of Term.term * c with show
+
+    let rec split = function
+    | Term.Var  _              as t -> (H, t)
+    | Term.App (Term.Lam _, _) as t -> (H, t)
+    | Term.Lam (x, t) -> let (c', t') = split t in (Lam (x, c'), t')
+    | Term.App (f, a) -> 
+	if Term.is_nf f 
+	then let (c', a') = split a in (Arg (f, c'), a')
+        else let (c', f') = split f in (Fun (c', a), f')
+
+    let rec patch_hole (c, t) =
+      match c with
+      | H            -> t
+      | Lam (x, c')  -> Term.Lam (x, patch_hole (c', t))
+      | Fun (c', t') -> Term.App (patch_hole (c', t), t')
+      | Arg (t', c') -> Term.App (t', patch_hole (c', t))
+
+    let _ =
+      Printf.printf "Splitting-patching:\n%!";
+      Printf.printf "===================\n%!";
+      List.iter 
+	(fun t -> 
+	   if not @@ eq(Term.term) t (split t |> patch_hole) 
+	   then failwith (Printf.sprintf "Split/patch pair mismatch for %s\n%!" @@ show(Term.term) t)
+	) 
+	[Term.id; Term.app; Term.omega; Term.y; Term.z; Term.mul];
+      Printf.printf "Ok.\n%!"
+
+    module Simple =
+      struct
+
+	open Term
+
+	let name = "Simple Felleisen-style"
+
+	let eval t =
+	  let reduce = function
+	  | Term.App (Term.Lam (x, a), b) -> Term.subst a x b 
+	  | t -> t
+	  in
+	  let rec eval s t =
+	    if is_nf t 
+	    then match s with
+	         | []      -> t
+		 | c :: s' -> eval s' (patch_hole (c, t)) 
+	    else 
+	      let (c', t') = reduce t |> split in
+              eval (c'::s) t'
+	  in
+	  eval [] t
+	 
+      end
+
+  end
+
 module Tests =
   struct
 
@@ -625,11 +691,12 @@ let _ =
   Printf.printf "Testing various semantics\n%!";
   Printf.printf "=========================\n\n%!";
   Tests.run [
-    (module Semantics1.BigStep   : Tests.R);
-    (module Semantics1.SmallStep : Tests.R);
-    (module Semantics2           : Tests.R);
-    (module Semantics3           : Tests.R);
-    (module Semantics4           : Tests.R);
-    (module Semantics5           : Tests.R)
+    (module Semantics1.BigStep    : Tests.R);
+    (module Semantics1.SmallStep  : Tests.R);
+    (module Semantics2            : Tests.R);
+    (module Semantics3            : Tests.R);
+    (module Semantics4            : Tests.R);
+    (module Semantics5            : Tests.R);
+    (module FelleisenStyle.Simple : Tests.R)
   ]
 

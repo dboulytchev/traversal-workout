@@ -136,7 +136,10 @@ module DeBruijn =
       in
       inner (E.empty, 0) t
 
-    let fv t = transform(term) (object inherit [S.t] @term[foldl] end) S.empty t
+    let fv t = transform(term) (object inherit [S.t] @term[foldl]
+				  method c_Free s _ n = S.add n s
+                                end
+                               ) S.empty t
      
     let to_term t = 
       let rec inner s e d = function
@@ -551,6 +554,24 @@ module FelleisenStyle =
 	 
       end
 
+    module WithEnvironment =
+      struct
+
+	open Term
+
+	let name = "Felleisen-style with environment"
+(*
+	let eval t =
+	  let pop 
+	  let rec eval s e = function
+	  | Term.Var x -> (match lookup e x with `Free -> | `Bound t -> eval s e t)
+	  | Term.App (Term.Lam (x, a), b) ->
+	    
+	  in
+	  eval [] t
+*)	 
+      end
+
   end
 
 module Tests =
@@ -645,7 +666,7 @@ module Tests =
       (add @ z) @ one;
       (mul @ z) @ one;
       (mul @ two) @ two;
-
+      (("z" => !"z") @ ("x" => (!"x" @ omega) @ !"x")) @ ("x" => ("y" => !"y"))
     ] (Generator.generate 1000) 
 
     module type R = 
@@ -697,6 +718,6 @@ let _ =
     (module Semantics3            : Tests.R);
     (module Semantics4            : Tests.R);
     (module Semantics5            : Tests.R);
-    (module FelleisenStyle.Simple : Tests.R)
+    (*module FelleisenStyle.Simple : Tests.R*)
   ]
 

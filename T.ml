@@ -138,8 +138,7 @@ module DeBruijn =
 
     let fv t = transform(term) (object inherit [S.t] @term[foldl]
 				  method c_Free s _ n = S.add n s
-                                end
-                               ) S.empty t
+                                end) S.empty t
      
     let to_term t = 
       let rec inner s e d = function
@@ -171,7 +170,6 @@ module DeBruijn =
       Printf.printf "%s\n%!" (show(Term.term) (Term.add |> of_term |> to_term));
       Printf.printf "%s\n%!" (show(Term.term) (Term.mul |> of_term |> to_term));
       Printf.printf "\n%!"
-
 
   end
 
@@ -319,7 +317,6 @@ module Semantics3 =
 
     type flag = Semantics2.flag = T | F
     type env  = Semantics2.env
-    type k    = Kend | Kapp of term * flag * env * k 
 
     let empty  = Semantics2.empty
     let extend = Semantics2.extend
@@ -582,46 +579,52 @@ module Tests =
 
 	open MiniKanren
 
-	@type lterm = 
-	| Var of string logic
-	| App of lterm  logic * lterm logic
-	| Lam of string logic * lterm logic
+	@type ('string, 'self) lterm = 
+	| Var of 'string
+	| App of 'self * 'self
+	| Lam of 'string * 'self with show, gmap
 
-	let (!) = inj
+        module T = Fmap2 (struct type ('a, 'b) t = ('a, 'b) lterm let fmap f g = gmap(lterm) f g end)
+        
+	let (!) x = inj @@ lift x
+                                
+        let var x   = inj @@ T.distrib (Var x)
+        let app f x = inj @@ T.distrib (App (f, x))
+        let lam x f = inj @@ T.distrib (Lam (x, f))          
 
 	let rec substo l x a l' =
 	  conde [
-	    fresh (y) (l === !(Var y))(y === x)(l' === a);
+	    fresh (y) (l === var y)(y === x)(l' === a);
 	    fresh (m n m' n')
-	      (l  === !(App (m, n)))
-	      (l' === !(App (m', n')))
+	      (l  === app m n) 
+	      (l' === app m n')
 	      (substo m x a m')
 	      (substo n x a n');     
 	    fresh (v b)
-	      (l === !(Lam (v, b)))
+	      (l === lam v b)
 	      (conde [
                 (x === v) &&& (l' === l);
-                fresh (b') (l' === !(Lam (v, b'))) (substo b x a b')
+                fresh (b') (l' === lam v b') (substo b x a b')
 	      ])    
 	  ]
 	    
 	let rec evalo m n =
 	  conde [
 	    fresh (x) 
-	      (m === !(Var x))
+	      (m === var x)
 	      (n === m);    
 	    fresh (x l)
-	      (m === !(Lam (x, l)))
+	      (m === lam x l)
 	      (n === m);    
 	    fresh (f a f' a') 
-	      (m === !(App (f, a)))
+	      (m === app f a)
 	      (conde [
                  fresh (x l l')     
-                 (f' === !(Lam (x, l)))
+                 (f' === lam x l)
                  (substo l x a' l')
                  (evalo l' n);         
-                 fresh (p q) (f' === !(App (p, q))) (n === !(App (f', a')));
-                 fresh (x) (f' === !(Var x)) (n === !(App (f', a')))
+                 fresh (p q) (f' === app p q) (n === app f' a');
+                 fresh (x)   (f' === var x  ) (n === app f' a')
 	      ])
 	      (evalo f f')
 	      (evalo a a')
@@ -630,22 +633,19 @@ module Tests =
 	exception Free of int
 
 	let generate n =
- 	  run q (fun q  -> evalo q !(Lam (!"x", !(Var !"x")))) 
+ 	  run q (fun q  -> evalo q (lam !"x" (var !"x")))
 	        (fun qs ->  
                    Stream.take ~n:n qs |> 
                    List.map 
-		     (fun lt -> 
-                       let rec prj_term t = 			    
-			 let prj_string = prj_k (fun i _ -> string_of_int i) in
-		         let convert = function
-			 | Var  x     -> Term.Var (prj_string x)
-			 | App (m, n) -> Term.App (prj_term m, prj_term n)
-                         | Lam (x, m) -> Term.Lam (prj_string x, prj_term m)
-			 in
-			 try convert (prj_k (fun i _ -> raise (Free i)) t)
-			 with Free i -> Term.Var (string_of_int i)			 
-		       in
-		       prj_term lt 
+		     (fun lt ->
+                        let prj_string = function MiniKanren.Value s -> s | MiniKanren.Var (i, _) -> string_of_int i in
+                        let rec prj_term = function
+			| MiniKanren.Value (Var  x) -> Term.Var (prj_string x)
+			| MiniKanren.Value (App (m, n)) -> Term.App (prj_term m, prj_term n)
+                        | MiniKanren.Value (Lam (x, m)) -> Term.Lam (prj_string x, prj_term m)
+                        | MiniKanren.Var (i, _) -> Term.Var (string_of_int i)
+			in                        
+		        prj_term (lt#reify (let rec reify_term t = T.reify reify reify_term t in reify_term))
 		     ) 
 		)
 
